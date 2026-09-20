@@ -5,6 +5,9 @@ src/.cache.sqlite
 .cache.sqlite
 .cache_air_quality.sqlite
 .cache_weather_data.sqlite
+.idea
+
+_DS_Store
 
 # PEP 582; used by e.g. github.com/David-OConnor/pyflow and github.com/pdm-project/pdm
 __pypackages__/

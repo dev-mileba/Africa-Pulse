@@ -9,94 +9,80 @@ from pathlib import Path
 
 Path("data").mkdir(exist_ok=True)
 
+WEATHER_URL = "https://api.open-meteo.com/v1/forecast"
+AIR_QUALITY_URL = "https://air-quality-api.open-meteo.com/v1/air-quality"
 
-def get_air_quality_data(longitude, latitude):
-    cache_session = requests_cache.CachedSession(
-        ".cache_air_quality", expire_after=3600
-    )
-    retry_session = retry(cache_session, retries=5, backoff_factor=0.2)
-    openmeteo = openmeteo_requests.Client(session=retry_session)
-
-    air_url = "https://air-quality-api.open-meteo.com/v1/air-quality"
-    air_params = {
-        "latitude": latitude,
-        "longitude": longitude,
-        "hourly": ["carbon_dioxide", "dust", "carbon_monoxide"],
-        "timezone": "auto",
-        "start_date": "2026-09-13",
-        "end_date": "2026-09-20",
-    }
-    air_responses = openmeteo.weather_api(air_url, params=air_params)
-    air_response = air_responses[0]
-
-    air_hourly = air_response.Hourly()
-    air_hourly_carbon_dioxide = air_hourly.Variables(0).ValuesAsNumpy()
-    air_hourly_dust = air_hourly.Variables(1).ValuesAsNumpy()
-    air_hourly_carbon_monoxide = air_hourly.Variables(2).ValuesAsNumpy()
-
-    return (air_hourly_carbon_dioxide, air_hourly_dust, air_hourly_carbon_monoxide)
+WEATHER_VARIABLES = ["temperature_2m", "precipitation"]
+AIR_QUALITY_VARIABLES = ["carbon_dioxide", "dust", "carbon_monoxide"]
 
 
-def get_weather_data(longitude, latitude):
+def _client(cache_name):
     # Setup the Open-Meteo API client with cache and retry on error
-    cache_session = requests_cache.CachedSession(
-        ".cache_weather_data", expire_after=3600
-    )
+    cache_session = requests_cache.CachedSession(cache_name, expire_after=3600)
     retry_session = retry(cache_session, retries=5, backoff_factor=0.2)
-    openmeteo = openmeteo_requests.Client(session=retry_session)
+    return openmeteo_requests.Client(session=retry_session)
 
-    # Make sure all required weather variables are listed here
-    # The order of variables in hourly or daily is important to assign them correctly below
-    url = "https://api.open-meteo.com/v1/forecast"
+
+def _hourly_frame(response, variables):
+    hourly = response.Hourly()
+    df = pd.DataFrame(
+        {
+            "date": pd.date_range(
+                start=pd.to_datetime(hourly.Time(), unit="s", utc=True),
+                end=pd.to_datetime(hourly.TimeEnd(), unit="s", utc=True),
+                freq=pd.Timedelta(seconds=hourly.Interval()),
+                inclusive="left",
+            )
+        }
+    )
+    # The order of variables in the request must match the order read here
+    for i, name in enumerate(variables):
+        df[name] = hourly.Variables(i).ValuesAsNumpy()
+    return df
+
+
+def _fetch_hourly(client, url, cities, variables, start_date, end_date):
     params = {
-        "latitude": latitude,
-        "longitude": longitude,
-        "hourly": ["temperature_2m", "precipitation"],
-        "timezone": "auto",
-        "start_date": "2026-09-13",
-        "end_date": "2026-09-20",
+        "latitude": [c["lat"] for c in cities],
+        "longitude": [c["lon"] for c in cities],
+        "hourly": variables,
+        "timezone": "UTC",
+        "start_date": start_date,
+        "end_date": end_date,
     }
-    responses = openmeteo.weather_api(url, params=params)
-    response = responses[0]
-    hourly = response.Hourly()
+    responses = client.weather_api(url, params=params)
 
-    # Process first location. Add a for-loop for multiple locations or weather models
-    response = responses[0]
-    # print(f"Coordinates: {response.Latitude()}°N {response.Longitude()}°E")
-    timezone = response.Timezone()  # b'Africa/Lagos'
-    timezone_str = timezone.decode("utf-8")  # 'Africa/Lagos'
-    city = timezone_str.split("/")[-1]  # 'Lagos'
-    city = city.replace("_", " ")  # handles names like 'Addis_Ababa' -> 'Addis Ababa'
-    # print(city)
+    # Responses come back in the same order as the requested locations
+    frames = []
+    for city, response in zip(cities, responses, strict=True):
+        df = _hourly_frame(response, variables)
+        df["city"] = city["city"]
+        df["country"] = city["country"]
+        frames.append(df)
+    return pd.concat(frames, ignore_index=True)
 
-    hourly = response.Hourly()
 
-    hourly_temperature_2m = hourly.Variables(0).ValuesAsNumpy()
-    hourly_precipitation = hourly.Variables(1).ValuesAsNumpy()
-
-    hourly_data = {
-        "date": pd.date_range(
-            start=pd.to_datetime(hourly.Time(), unit="s", utc=True),
-            end=pd.to_datetime(hourly.TimeEnd(), unit="s", utc=True),
-            freq=pd.Timedelta(seconds=hourly.Interval()),
-            inclusive="left",
-        ).tz_convert(response.Timezone().decode())
-    }
-
-    hourly_carbon_dioxide, hourly_dust, hourly_carbon_monoxide = get_air_quality_data(
-        longitude, latitude
+def get_air_quality_data(cities, start_date, end_date):
+    client = _client(".cache_air_quality")
+    return _fetch_hourly(
+        client, AIR_QUALITY_URL, cities, AIR_QUALITY_VARIABLES, start_date, end_date
     )
 
-    # print(len(hourly_temperature_2m))
-    # print(len(hourly_carbon_dioxide))
 
-    hourly_data["temperature_2m"] = hourly_temperature_2m
-    hourly_data["precipitation"] = hourly_precipitation
-    hourly_data["city"] = city
-    hourly_data["carbon_dioxide"] = hourly_carbon_dioxide
-    hourly_data["carbon_monoxide"] = hourly_carbon_monoxide
-    hourly_data["dust"] = hourly_dust
-    hourly_dataframe = pd.DataFrame(data=hourly_data)
-    hourly_dataframe.to_csv(f"data/weather_{date.today()}.csv", mode="w")
+def get_weather_data(cities, start_date, end_date):
+    client = _client(".cache_weather_data")
+    weather = _fetch_hourly(
+        client, WEATHER_URL, cities, WEATHER_VARIABLES, start_date, end_date
+    )
+    air_quality = get_air_quality_data(cities, start_date, end_date)
+
+    # Join on city + timestamp (not row position). An outer join keeps gaps
+    # visible instead of silently dropping rows that only one source has.
+    hourly_dataframe = weather.merge(
+        air_quality, on=["city", "country", "date"], how="outer"
+    ).sort_values(["city", "date"], ignore_index=True)
+
+    hourly_dataframe.to_csv(f"data/weather_{date.today()}.csv", index=False)
 
     print(hourly_dataframe)
+    return hourly_dataframe
