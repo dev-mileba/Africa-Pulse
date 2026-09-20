@@ -1,0 +1,13 @@
+[project]
+name = "africa-pulse"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = [
+    "black>=26.5.1",
+    "ipykernel>=7.3.0",
+    "numpy>=2.5.3",
+    "openmeteo-requests>=1.7.5",
+    "pandas>=3.0.6",
+    "requests-cache>=1.3.3",
+    "retry-requests>=2.0.0",
+]
