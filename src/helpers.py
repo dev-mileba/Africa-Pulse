@@ -11,6 +11,7 @@ Path("data").mkdir(exist_ok=True)
 
 WEATHER_URL = "https://api.open-meteo.com/v1/forecast"
 AIR_QUALITY_URL = "https://air-quality-api.open-meteo.com/v1/air-quality"
+OPEN_SKY_URL = f"https://opensky-network.org/api/flights/"
 
 WEATHER_VARIABLES = ["temperature_2m", "precipitation"]
 AIR_QUALITY_VARIABLES = ["carbon_dioxide", "dust", "carbon_monoxide"]

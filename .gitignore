@@ -6,8 +6,9 @@ src/.cache.sqlite
 .cache_air_quality.sqlite
 .cache_weather_data.sqlite
 .idea
+BUILD_LOG.md
 
-_DS_Store
+.DS_Store
 
 # PEP 582; used by e.g. github.com/David-OConnor/pyflow and github.com/pdm-project/pdm
 __pypackages__/
@@ -21,4 +22,10 @@ venv/
 ENV/
 env.bak/
 venv.bak/
+
+
+# Raw source responses (reproducible via ingestion; may be subject to source terms)
 data/raw/
+
+__pycache__/
+*.pyc

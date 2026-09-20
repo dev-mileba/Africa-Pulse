@@ -5,3 +5,4 @@ On clickhouse, I created a clickhouse database then I would add my data from a c
 
 Data sources:
 weather : open-meteo
+mobility : opensky
