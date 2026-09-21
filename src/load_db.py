@@ -4,13 +4,17 @@ import psycopg2
 import numpy as np
 from psycopg2.extras import execute_values
 from psycopg2.extensions import register_adapter, AsIs
+import os
+from dotenv import load_dotenv
+
+load_dotenv()
 
 conn = psycopg2.connect(
-    host="localhost",
-    port="5432",
-    dbname="db_in_psg",
-    user="postgres",
-    password="postgres",
+    host=os.getenv("POSTGRES_HOST"),
+    port=os.getenv("POSTGRES_PORT"),
+    dbname=os.getenv("POSTGRES_DB"),
+    user=os.getenv("POSTGRES_USER"),
+    password=os.getenv("POSTGRES_PASSWORD"),
 )
 
 # TODO: Change the date to a dynamic date
