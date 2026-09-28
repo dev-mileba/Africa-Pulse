@@ -1,5 +1,4 @@
 import os
-from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -8,9 +7,30 @@ from dotenv import load_dotenv
 from psycopg2.extensions import AsIs, register_adapter
 from psycopg2.extras import execute_values
 
+from pipeline.paths import FX_RATE_SOURCE, OPENSKY_MOBILITY_SOURCE, WEATHER_SOURCE
+
 load_dotenv()
 
-TABLES = {"fx_rates", "weather", "mobility"}
+# Natural key (must match each table's PRIMARY KEY above) and what a
+# duplicate key should do: "update" refreshes the row with the new values,
+# "nothing" leaves the existing row alone.
+#   - fx_rates: rates can be corrected after the fact -> update
+#   - weather:  recent hours are forecasts that get revised -> update
+#   - mobility: a finished flight rarely changes -> leave the first copy
+TABLES = {
+    "fx_rates": {
+        "key": ["base_currency", "quote_currency", "rate_date"],
+        "on_conflict": "update",
+    },
+    "weather": {
+        "key": ["city", "date"],
+        "on_conflict": "update",
+    },
+    "mobility": {
+        "key": ["queried_airport", "direction", "icao24", "first_seen", "last_seen"],
+        "on_conflict": "nothing",
+    },
+}
 
 CREATE_FX_RATES = """
     CREATE TABLE IF NOT EXISTS fx_rates (
@@ -81,7 +101,12 @@ def create_tables(conn):
 
 
 def load(conn, table_name, dataframe):
-    """Bulk-insert a DataFrame into an existing table."""
+    """Upsert a DataFrame into an existing table on its natural key.
+
+    Safe to re-run: a row that already exists is either refreshed or left
+    alone (see TABLES[table_name]["on_conflict"]), never duplicated or
+    rejected with a primary-key error.
+    """
     if table_name not in TABLES:
         raise ValueError(f"Unsupported table name: {table_name}")
     if dataframe.empty:
@@ -91,22 +116,33 @@ def load(conn, table_name, dataframe):
     register_adapter(np.int64, lambda val: AsIs(val))
     register_adapter(np.float64, lambda val: AsIs(val))
 
+    spec = TABLES[table_name]
+    key_cols = spec["key"]
+    update_cols = [c for c in dataframe.columns if c not in key_cols]
+
+    if spec["on_conflict"] == "update" and update_cols:
+        set_clause = ", ".join(f"{c} = EXCLUDED.{c}" for c in update_cols)
+        conflict_clause = f"ON CONFLICT ({', '.join(key_cols)}) DO UPDATE SET {set_clause}"
+    else:
+        conflict_clause = f"ON CONFLICT ({', '.join(key_cols)}) DO NOTHING"
+
     rows = [tuple(x) for x in dataframe.to_numpy()]
     cols = ",".join(dataframe.columns)
+    sql = f"INSERT INTO {table_name} ({cols}) VALUES %s {conflict_clause}"
 
     with conn.cursor() as cur:
-        execute_values(cur, f"INSERT INTO {table_name} ({cols}) VALUES %s", rows)
+        execute_values(cur, sql, rows)
+        affected = cur.rowcount
     conn.commit()
-    print(f"{table_name}: loaded {len(rows)} rows")
+    print(f"{table_name}: {len(rows)} rows in file, {affected} inserted or updated")
 
 
 def main():
-    # TODO: pick the latest CSV instead of a hardcoded date
-    # TODO: add ON CONFLICT so a second run doesn't fail on the primary key
-    root = Path(__file__).resolve().parents[3]  # project root
-    fx_rates = pd.read_csv(root / "data" / "fx_rates_2026-09-20.csv")
-    mobility = pd.read_csv(root / "data" / "opensky_mobility_2026-09-20.csv")
-    weather = pd.read_csv(root / "data" / "weather_2026-09-20.csv")
+    # These are the same fixed-name files the extract/export functions write
+    # to (see pipeline/paths.py), so this always reads the latest run's output.
+    fx_rates = pd.read_csv(FX_RATE_SOURCE)
+    mobility = pd.read_csv(OPENSKY_MOBILITY_SOURCE)
+    weather = pd.read_csv(WEATHER_SOURCE)
 
     conn = connect()
     try:

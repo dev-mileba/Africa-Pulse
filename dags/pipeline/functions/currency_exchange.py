@@ -16,9 +16,13 @@ import pandas as pd
 import requests
 from dotenv import load_dotenv
 
+from pipeline.paths import FX_RATE_SOURCE, ensure_dirs
+
 # This file lives at dags/pipeline/functions/, so the root is 3 levels up.
 load_dotenv(Path(__file__).resolve().parents[3] / ".env")
 EXCHANGE_RATE_API_KEY = os.environ["EXCHANGE_RATE_API_KEY"]
+
+ensure_dirs()
 
 log = logging.getLogger(__name__)
 
@@ -113,7 +117,15 @@ def ingest_fx(start_day, end_day, currencies):
     Returns a DataFrame with one row per day and currency. Only days up to
     yesterday are requested. A day that fails is logged and left out; it is
     not filled with made-up values.
+
+    start_day/end_day may be date objects or "YYYY-MM-DD" strings (Airflow's
+    templated fields, e.g. "{{ ds }}", always render to strings).
     """
+    if isinstance(start_day, str):
+        start_day = date.fromisoformat(start_day)
+    if isinstance(end_day, str):
+        end_day = date.fromisoformat(end_day)
+
     batch_id = str(uuid.uuid4())
     yesterday = datetime.now(timezone.utc).date() - timedelta(days=1)
     if end_day > yesterday:
@@ -166,11 +178,29 @@ def ingest_fx(start_day, end_day, currencies):
     return _add_quality_flags(df)
 
 
-def export_fx_csv(fx, path=f"data/fx_rates_{date.today()}.csv"):
+def export_fx_csv(fx, path=FX_RATE_SOURCE):
     """Write the rates DataFrame to CSV."""
     Path(path).parent.mkdir(parents=True, exist_ok=True)
     fx.to_csv(path, index=False)
     log.info("wrote %d rows to %s", len(fx), path)
+
+
+def ingest_and_export_fx(start_day, end_day, currencies, path=FX_RATE_SOURCE):
+    """Fetch and write in one step, for use as a single Airflow task.
+
+    Returns a small JSON-safe summary, not the DataFrame: Airflow's default
+    XCom backend serializes to JSON and cannot carry a DataFrame, so the
+    fetch and the CSV write are kept in one callable rather than split into
+    two tasks connected by XCom.
+
+    watermark_date is the latest rate_date actually written this run, which
+    can be earlier than the requested end_day if the API capped the range
+    or a day failed.
+    """
+    fx = ingest_fx(start_day, end_day, currencies)
+    export_fx_csv(fx, path)
+    watermark = None if fx.empty else fx["rate_date"].max().isoformat()
+    return {"rows": len(fx), "watermark_date": watermark}
 
 
 def summarize_fx(fx):

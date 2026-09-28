@@ -17,6 +17,7 @@ FX_RATE_STAGING = STAGING_DIR / "fx_rates.csv"
 WEATHER_STAGING = STAGING_DIR / "weather.csv"
 OPENSKY_MOBILITY_STAGING = STAGING_DIR / "opensky_mobility.csv"
 
+
 def ensure_dirs() -> None:
     for d in (SOURCE_DIR, STAGING_DIR, WAREHOUSE_DIR):
         d.mkdir(parents=True, exist_ok=True)

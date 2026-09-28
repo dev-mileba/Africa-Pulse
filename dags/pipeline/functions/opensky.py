@@ -15,7 +15,10 @@ from pathlib import Path
 import pandas as pd
 import requests
 
-from token_manager import TokenManager
+from pipeline.functions.token_manager import TokenManager
+from pipeline.paths import OPENSKY_MOBILITY_SOURCE, ensure_dirs
+
+ensure_dirs()
 
 log = logging.getLogger(__name__)
 
@@ -121,7 +124,15 @@ def ingest_flights(cities, start_day, end_day):
 
     Returns a deduplicated DataFrame. Only days up to yesterday (UTC) are
     requested, because OpenSky publishes flight data with a delay.
+
+    start_day/end_day may be date objects or "YYYY-MM-DD" strings (Airflow's
+    templated fields, e.g. "{{ ds }}", always render to strings).
     """
+    if isinstance(start_day, str):
+        start_day = date.fromisoformat(start_day)
+    if isinstance(end_day, str):
+        end_day = date.fromisoformat(end_day)
+
     batch_id = str(uuid.uuid4())
     last_available = datetime.now(timezone.utc).date() - timedelta(days=1)
     if end_day > last_available:
@@ -183,11 +194,36 @@ def ingest_flights(cities, start_day, end_day):
     )
 
 
-def export_movements_csv(movements, path=f"data/opensky_mobility_{date.today()}.csv"):
+def export_movements_csv(movements, path=OPENSKY_MOBILITY_SOURCE):
     """Write the movements DataFrame to CSV."""
     Path(path).parent.mkdir(parents=True, exist_ok=True)
     movements.to_csv(path, index=False)
     log.info("wrote %d movements to %s", len(movements), path)
+
+
+def ingest_and_export_flights(cities, start_day, end_day, path=OPENSKY_MOBILITY_SOURCE):
+    """Fetch and write in one step, for use as a single Airflow task.
+
+    Returns a small JSON-safe summary, not the DataFrame: Airflow's default
+    XCom backend serializes to JSON and cannot carry a DataFrame, so the
+    fetch and the CSV write are kept in one callable rather than split into
+    two tasks connected by XCom.
+
+    watermark_date is the latest first_seen/last_seen (event time) actually
+    written this run, which can be earlier than the requested end_day if a
+    window failed or credits ran out partway through.
+    """
+    movements = ingest_flights(cities, start_day, end_day)
+    export_movements_csv(movements, path)
+    if movements.empty:
+        watermark = None
+    else:
+        watermark = (
+            max(movements["first_seen"].max(), movements["last_seen"].max())
+            .date()
+            .isoformat()
+        )
+    return {"rows": len(movements), "watermark_date": watermark}
 
 
 def summarize(movements):

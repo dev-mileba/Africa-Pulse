@@ -1,17 +1,14 @@
-from datetime import date
-
 import openmeteo_requests
-
 import pandas as pd
 import requests_cache
 from retry_requests import retry
-from pathlib import Path
 
-Path("data").mkdir(exist_ok=True)
+from pipeline.paths import WEATHER_SOURCE, ensure_dirs
+
+ensure_dirs()
 
 WEATHER_URL = "https://api.open-meteo.com/v1/forecast"
 AIR_QUALITY_URL = "https://air-quality-api.open-meteo.com/v1/air-quality"
-OPEN_SKY_URL = f"https://opensky-network.org/api/flights/"
 
 WEATHER_VARIABLES = ["temperature_2m", "precipitation"]
 AIR_QUALITY_VARIABLES = ["carbon_dioxide", "dust", "carbon_monoxide"]
@@ -83,7 +80,22 @@ def get_weather_data(cities, start_date, end_date):
         air_quality, on=["city", "country", "date"], how="outer"
     ).sort_values(["city", "date"], ignore_index=True)
 
-    hourly_dataframe.to_csv(f"data/weather_{date.today()}.csv", index=False)
+    hourly_dataframe.to_csv(WEATHER_SOURCE, index=False)
 
-    print(hourly_dataframe)
+    # print(hourly_dataframe)
     return hourly_dataframe
+
+
+def ingest_and_export_weather(cities, start_date, end_date):
+    """Fetch weather+air-quality and write in one step, for use as a single
+    Airflow task. Returns a small JSON-safe summary instead of the
+    DataFrame: Airflow's default XCom backend serializes to JSON and cannot
+    hold a pandas DataFrame, and get_weather_data already writes the CSV.
+
+    watermark_date is the latest hourly timestamp actually written this
+    run (as a date), which can differ from the requested end_date if a
+    source returned less than asked for.
+    """
+    weather = get_weather_data(cities, start_date, end_date)
+    watermark = None if weather.empty else weather["date"].max().date().isoformat()
+    return {"rows": len(weather), "watermark_date": watermark}

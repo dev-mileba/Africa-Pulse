@@ -53,7 +53,6 @@ services:
           --lastname Flow \
           --role Admin \
           --email airflow@example.com || true
-        python /opt/airflow/scripts/generate_source_data.py --seed
     depends_on:
       <<: *airflow-common-depends-on
 
