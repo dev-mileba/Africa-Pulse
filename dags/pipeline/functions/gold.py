@@ -386,14 +386,20 @@ def build_marts(conn):
         _rebuild(conn, table, create_sql, rebuild_sql)
 
 
-def main(conn=None):
+def main(db_conn=None):
     """Opens its own connection via load_db.connect() (which prints the
-    target host/db) unless one is passed in -- pass an explicit conn when
-    testing against something other than the real database.
+    target host/db) unless one is passed in -- pass an explicit db_conn
+    when testing against something other than the real database.
+
+    Parameter is named db_conn, not conn: Airflow reserves "conn" as a
+    context key (the Connections accessor), and a PythonOperator with no
+    op_kwargs would silently pass that accessor in for a parameter named
+    conn instead of the intended default of None.
     """
-    owns_conn = conn is None
+    owns_conn = db_conn is None
     if owns_conn:
-        conn = connect()
+        db_conn = connect()
+    conn = db_conn
     try:
         build_dimensions(conn)  # facts reference dim_date, so this runs first
         build_facts(conn)  # marts are built from the facts, so this runs next

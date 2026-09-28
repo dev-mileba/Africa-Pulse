@@ -1,5 +1,12 @@
 x-airflow-common: &airflow-common
   image: apache/airflow:2.9.3
+  # Passes every OPENSKY_*/EXCHANGE_RATE_API_KEY/POSTGRES_* credential from
+  # the project's .env into every Airflow container. Without this, the DAG
+  # tasks' own load_dotenv() calls have nothing to find inside the
+  # container (the project's .env is not otherwise mounted) and every task
+  # that touches an API or the database fails on a missing credential.
+  env_file:
+    - .env
   environment: &airflow-common-env
     AIRFLOW__CORE__EXECUTOR: LocalExecutor
     AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres/airflow
@@ -11,6 +18,14 @@ x-airflow-common: &airflow-common
     PIPELINE_DATA_DIR: /opt/airflow/data
     SLACK_WEBHOOK_URL: ${SLACK_WEBHOOK_URL:-}
     SIMULATE_LOAD_FAILURE: ${SIMULATE_LOAD_FAILURE:-false}
+    # Packages our DAG code imports that apache/airflow:2.9.3 doesn't ship
+    # with (verified against this exact image: numpy/pandas/psycopg2-binary/
+    # requests/python-dotenv are already present, these three are not).
+    # This installs on every container start -- Airflow's own entrypoint
+    # script labels it "a development/test feature only, NEVER use it in
+    # production"; a custom-built image (Dockerfile + `pip install -r
+    # requirements.txt`) is the right call beyond local development.
+    _PIP_ADDITIONAL_REQUIREMENTS: ${_PIP_ADDITIONAL_REQUIREMENTS:-openmeteo-requests requests-cache retry-requests}
   volumes:
     - ./dags:/opt/airflow/dags
     - ./scripts:/opt/airflow/scripts
@@ -37,8 +52,11 @@ services:
       retries: 5
     restart: always
 
-  # One-shot: migrates the metadata DB, creates the admin user, and seeds
-  # the fake source CSVs so the DAG has something to extract on first run.
+  # One-shot: migrates the metadata DB and creates the admin user. (Seed
+  # data isn't needed for the DAG itself: load_to_postgres only runs after
+  # the three ingest tasks in a real run, so it's covered either way. If you
+  # ever want to trigger a downstream task in isolation without running the
+  # whole DAG, that would need its own seed step -- not built.)
   airflow-init:
     <<: *airflow-common
     entrypoint: /bin/bash
@@ -60,7 +78,7 @@ services:
     <<: *airflow-common
     command: webserver
     ports:
-      - '9080:8080'
+      - '9081:8080'
     healthcheck:
       test: ['CMD', 'curl', '--fail', 'http://localhost:8080/health']
       interval: 30s

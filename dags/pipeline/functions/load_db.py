@@ -146,10 +146,18 @@ def load(conn, table_name, dataframe):
     print(f"{table_name}: {len(rows)} rows in file, {affected} inserted or updated")
 
 
-def main(conn=None):
+def main(db_conn=None):
     """Opens its own connection via connect() (which prints the target
-    host/db) unless one is passed in -- pass an explicit conn when testing
-    against something other than the real database.
+    host/db) unless one is passed in -- pass an explicit db_conn when
+    testing against something other than the real database.
+
+    Parameter is named db_conn, not conn: Airflow reserves "conn" as a
+    context key (the Connections accessor for "{{ conn.my_id.host }}"
+    templating). A PythonOperator with no op_kwargs passes its context
+    through for any parameter name that matches a reserved key, so a
+    parameter literally named conn silently received Airflow's connections
+    accessor instead of the intended default of None here, skipping the
+    real connect() call entirely.
     """
     # These are the same fixed-name files the extract/export functions write
     # to (see pipeline/paths.py), so this always reads the latest run's output.
@@ -157,9 +165,10 @@ def main(conn=None):
     mobility = pd.read_csv(OPENSKY_MOBILITY_SOURCE)
     weather = pd.read_csv(WEATHER_SOURCE)
 
-    owns_conn = conn is None
+    owns_conn = db_conn is None
     if owns_conn:
-        conn = connect()
+        db_conn = connect()
+    conn = db_conn
     try:
         create_tables(conn)
         load(conn, "fx_rates", fx_rates)
