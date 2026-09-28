@@ -4,7 +4,7 @@ from functools import partial
 from airflow import DAG
 from airflow.operators.python import PythonOperator, get_current_context
 
-from pipeline.functions import load_db, silver, warehouse
+from pipeline.functions import gold, load_db, silver, warehouse
 from pipeline.functions.currency_exchange import ingest_and_export_fx
 from pipeline.functions.helpers import ingest_and_export_weather
 from pipeline.functions.opensky import ingest_and_export_flights
@@ -112,15 +112,24 @@ with DAG(
     # three tables (silver.weather_hourly / fx_rates_daily / flight_movements),
     # quarantining rows that fail a hard rule into silver.rejected_records.
     # Every silver table is fully re-derived from bronze on each run, so
-    # this always reflects bronze's current state. Gold (dimensions, facts,
-    # and the marts) is not built yet.
+    # this always reflects bronze's current state.
     build_warehouse_silver = PythonOperator(
         task_id="build_warehouse_silver",
         python_callable=silver.main,
+    )
+
+    # Rebuilds gold's dimensions (dim_date, dim_city), one fact table per
+    # domain, and the three single-domain marts (climate & environment,
+    # mobility, economic). The City Intelligence mart -- the composite
+    # score across all three domains -- is not built yet: its weighting and
+    # normalization need a design decision, not an invented default.
+    build_warehouse_gold = PythonOperator(
+        task_id="build_warehouse_gold",
+        python_callable=gold.main,
     )
 
     [
         ingest_currency_exchange,
         ingest_weather_data,
         ingest_flight_movements,
-    ] >> load_to_postgres >> build_warehouse_bronze >> build_warehouse_silver
+    ] >> load_to_postgres >> build_warehouse_bronze >> build_warehouse_silver >> build_warehouse_gold
