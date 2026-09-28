@@ -1,9 +1,4 @@
 import logging
-from datetime import date, timedelta
-
-from currency_exchange import export_fx_csv, ingest_fx, summarize_fx
-from helpers import get_weather_data
-from opensky import export_movements_csv, ingest_flights, summarize
 
 CITIES = [
     {

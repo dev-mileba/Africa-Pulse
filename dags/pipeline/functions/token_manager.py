@@ -4,8 +4,9 @@ import os
 from pathlib import Path
 from dotenv import load_dotenv
 
-# Resolve from the project root, not the current working directory
-load_dotenv(Path(__file__).resolve().parents[1] / ".env")
+# Resolve from the project root, not the current working directory.
+# This file lives at dags/pipeline/functions/, so the root is 3 levels up.
+load_dotenv(Path(__file__).resolve().parents[3] / ".env")
 
 TOKEN_URL = "https://auth.opensky-network.org/auth/realms/opensky-network/protocol/openid-connect/token"
 CLIENT_ID = os.environ["OPENSKY_CLIENT_ID"]

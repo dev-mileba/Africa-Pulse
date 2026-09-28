@@ -16,7 +16,8 @@ import pandas as pd
 import requests
 from dotenv import load_dotenv
 
-load_dotenv(Path(__file__).resolve().parents[1] / ".env")
+# This file lives at dags/pipeline/functions/, so the root is 3 levels up.
+load_dotenv(Path(__file__).resolve().parents[3] / ".env")
 EXCHANGE_RATE_API_KEY = os.environ["EXCHANGE_RATE_API_KEY"]
 
 log = logging.getLogger(__name__)
