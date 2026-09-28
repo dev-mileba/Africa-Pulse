@@ -83,10 +83,19 @@ CREATE_MOBILITY = """
 
 
 def connect():
+    """Connect using POSTGRES_* from .env. Shared by every module in this
+    package (load_db, warehouse, silver, ...), so this is the one place to
+    look if a script unexpectedly touched the real database: it always
+    prints exactly which host/db it's about to open, host first, host/db
+    only (never the password), specifically so that never has to be
+    guessed or discovered after the fact.
+    """
+    host, dbname = os.getenv("POSTGRES_HOST"), os.getenv("POSTGRES_DB")
+    print(f"[load_db.connect] connecting to postgres://{host}/{dbname}")
     return psycopg2.connect(
-        host=os.getenv("POSTGRES_HOST"),
+        host=host,
         port=os.getenv("POSTGRES_PORT"),
-        dbname=os.getenv("POSTGRES_DB"),
+        dbname=dbname,
         user=os.getenv("POSTGRES_USER"),
         password=os.getenv("POSTGRES_PASSWORD"),
     )
@@ -137,21 +146,28 @@ def load(conn, table_name, dataframe):
     print(f"{table_name}: {len(rows)} rows in file, {affected} inserted or updated")
 
 
-def main():
+def main(conn=None):
+    """Opens its own connection via connect() (which prints the target
+    host/db) unless one is passed in -- pass an explicit conn when testing
+    against something other than the real database.
+    """
     # These are the same fixed-name files the extract/export functions write
     # to (see pipeline/paths.py), so this always reads the latest run's output.
     fx_rates = pd.read_csv(FX_RATE_SOURCE)
     mobility = pd.read_csv(OPENSKY_MOBILITY_SOURCE)
     weather = pd.read_csv(WEATHER_SOURCE)
 
-    conn = connect()
+    owns_conn = conn is None
+    if owns_conn:
+        conn = connect()
     try:
         create_tables(conn)
         load(conn, "fx_rates", fx_rates)
         load(conn, "weather", weather)
         load(conn, "mobility", mobility)
     finally:
-        conn.close()
+        if owns_conn:
+            conn.close()
 
 
 if __name__ == "__main__":

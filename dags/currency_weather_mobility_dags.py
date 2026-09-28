@@ -4,6 +4,7 @@ from functools import partial
 from airflow import DAG
 from airflow.operators.python import PythonOperator, get_current_context
 
+from pipeline.functions import load_db, silver, warehouse
 from pipeline.functions.currency_exchange import ingest_and_export_fx
 from pipeline.functions.helpers import ingest_and_export_weather
 from pipeline.functions.opensky import ingest_and_export_flights
@@ -44,17 +45,17 @@ with DAG(
     tags=["currency", "weather", "mobility", "etl"],
 ) as dag:
 
-    # Each task fetches from its source and writes straight to CSV in one
-    # step (ingest_and_export_fx / ingest_and_export_flights /
+    # Each ingest task fetches from its source and writes straight to CSV in
+    # one step (ingest_and_export_fx / ingest_and_export_flights /
     # ingest_and_export_weather), instead of returning a DataFrame for a
     # separate task to pick up: Airflow's default XCom backend serializes to
     # JSON and cannot hold a pandas DataFrame, so a two-task ingest-then-export
     # split would fail as soon as it ran. Each callable instead returns a
     # small {"rows": ..., "watermark_date": ...} summary, and
     # _run_and_push_watermark also pushes watermark_date under its own XCom
-    # key. The three sources are independent, so the tasks run in parallel;
-    # loading the CSVs into Postgres (pipeline.functions.load_db) is a
-    # separate, not-yet-wired-in step.
+    # key. The three sources are independent, so the ingest tasks run in
+    # parallel; load_to_postgres reads the same fixed-name CSVs from disk
+    # (see pipeline/paths.py) once all three have finished.
 
     ingest_currency_exchange = PythonOperator(
         task_id="ingest_currency_exchange",
@@ -93,3 +94,33 @@ with DAG(
             "end_day": "{{ ds }}",
         },
     )
+
+    load_to_postgres = PythonOperator(
+        task_id="load_to_postgres",
+        python_callable=load_db.main,
+    )
+
+    # Copies public.{fx_rates,weather,mobility} into a bronze schema (same
+    # rows, same upsert rules as load_to_postgres) inside db_in_ch, and
+    # creates empty silver/gold schemas.
+    build_warehouse_bronze = PythonOperator(
+        task_id="build_warehouse_bronze",
+        python_callable=warehouse.main,
+    )
+
+    # Rebuilds silver.dim_city plus cleaned, validated versions of bronze's
+    # three tables (silver.weather_hourly / fx_rates_daily / flight_movements),
+    # quarantining rows that fail a hard rule into silver.rejected_records.
+    # Every silver table is fully re-derived from bronze on each run, so
+    # this always reflects bronze's current state. Gold (dimensions, facts,
+    # and the marts) is not built yet.
+    build_warehouse_silver = PythonOperator(
+        task_id="build_warehouse_silver",
+        python_callable=silver.main,
+    )
+
+    [
+        ingest_currency_exchange,
+        ingest_weather_data,
+        ingest_flight_movements,
+    ] >> load_to_postgres >> build_warehouse_bronze >> build_warehouse_silver
